@@ -29,7 +29,7 @@ This progressive training approach ensures the model learns the proper format fi
 
 ## Reward System
 
-The Namek project implements a progressive reward system across its three training stages:
+The Gi-Unit project implements a progressive reward system across its three training stages:
 
 ### Stage 1 (Krillon)
 - Uses standard supervised fine-tuning without explicit rewards
