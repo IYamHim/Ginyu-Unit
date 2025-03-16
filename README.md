@@ -1,4 +1,4 @@
-# Namek Project
+# Codename Gi-Unyt
 
 A deep learning project for stonk market prediction using transformer models.
 
