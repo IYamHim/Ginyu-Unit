@@ -1,4 +1,4 @@
-# Namek Project Architecture
+# Ginyu-Uint Architecture
 
 ## Overview
 
