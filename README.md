@@ -19,7 +19,7 @@ A deep learning project for stonk market prediction using transformer models.
 
 ## Training Process
 
-The Namek project uses a three-stage training approach:
+The Gi-Unyt project uses a three-stage training approach:
 
 1. **Stage 1 (Krillon)**: Supervised Fine-Tuning (SFT) to teach the model the proper format and basic prediction capabilities
 2. **Stage 2 (Piccolo)**: Intermediate GRPO training with a balanced dataset (50% UP, 50% DOWN) for easier prediction learning
