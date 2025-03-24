@@ -7,6 +7,7 @@ A deep learning project for stonk market prediction using transformer models.
 
 ## Files
 
+- **Bulma**: Energy Sector SFT Trainer & Energy Sector stonk scaper via yfinance. Generates synthetic missing data, thinking trace, and 85-98 variant thinking traces per stock via Groq that are grounded in truth. The default will generate over 2,000 synthetic variant days to train on. A Groq API Key is required. 
 - **Krillon.py**: Stage 1 SFT (Supervised Fine-Tuning) script for initial model training
 - **Piccolo.py**: Stage 2 GRPO training script with balanced dataset (50% UP, 50% DOWN)
 - **Kakarot.py**: Stage 3 RLHF training script for the model
