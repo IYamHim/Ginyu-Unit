@@ -1,4 +1,4 @@
-# Bulma Stock Prediction Model
+# Bulma
 
 This repository contains a two-stage stock prediction model, starting with basic SFT training and then enhancing DOWN prediction accuracy.
 
