@@ -11,7 +11,7 @@ integrated with Unsloth for optimization and QLoRA for memory efficiency.
 IMPORTANT:
 - Ensure the custom reward logic in `calculate_trade_reward` matches your goals.
 - Verify Google Drive paths.
-- Ensure sufficient VRAM (>18GB recommended).
+- Ensure sufficient VRAM (>25.5GB recommended).
 
 --- Colab Setup Instructions ---
 1. Runtime Selection: Go to Runtime > Change runtime type. Select GPU (A100 recommended).
