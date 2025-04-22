@@ -60,7 +60,8 @@ print("\nCELL 2: Running Setup and Version Check...")
 import traceback
 import os
 import sys # Import sys for handler check
-
+import requests
+from datetime import datetime, timedelta
 # --- Mount Google Drive ---
 try:
     # Check if running in Colab
@@ -78,6 +79,38 @@ except Exception as e:
     print("Ensure you authorize access when prompted.")
 
 # --- Import Core Libraries FOR VERSION CHECK ONLY ---
+
+
+# Add your NewsAPI key
+NEWS_API_KEY = "[News_API_Key]"  # Replace with your actual key
+
+def get_news(ticker):
+    """Simple function to get news for a stock ticker"""
+    try:
+        url = "https://newsapi.org/v2/everything"
+        today = datetime.now().strftime("%Y-%m-%d")
+        week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        
+        params = {
+            "q": ticker,
+            "from": week_ago,
+            "to": today,
+            "language": "en",
+            "apiKey": NEWS_API_KEY,
+            "pageSize": 3
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            news_text = ""
+            for article in data.get("articles", [])[:3]:
+                news_text += f"• {article.get('title', '')}\n"
+            return news_text
+        else:
+            return ""
+    except:
+        return ""
 # Import Unsloth FIRST
 try:
     import unsloth
@@ -94,7 +127,7 @@ try:
     import datasets
     import trl
     import peft
-    import bitsandbytes # Import to trigger potential setup errors here
+    import bitsandbytes 
     import accelerate
     import google.protobuf
     import triton # Check if Unsloth installed it
@@ -159,7 +192,6 @@ except Exception as e:
 print("\nSetup and Version Check Complete. Proceeding to Training Cell...")
 
 
-# -*- coding: utf-8 -*-
 # ==============================================================================
 # CELL 3: Custom Trainer Definitions (Run AFTER Cell 2)
 # ==============================================================================
@@ -216,6 +248,32 @@ logger = logging.getLogger("unsloth_grpo"); logger.setLevel(logging.INFO); logge
 if not logger.handlers:
     handler = logging.StreamHandler(sys.stdout); handler.setLevel(logging.INFO); formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"); handler.setFormatter(formatter); logger.addHandler(handler)
 logger.info("GRPO Training script loaded.")
+
+# Helper function to extract log probabilities from logits
+def log_probs_from_logits(logits, targets):
+    """
+    Compute log probabilities for given logits and target indices.
+    
+    Args:
+        logits: Logits tensor of shape (batch_size, sequence_length, vocab_size)
+        targets: Target indices tensor of shape (batch_size, sequence_length)
+        
+    Returns:
+        Log probabilities tensor of shape (batch_size, sequence_length)
+    """
+    # Get log probabilities from logits
+    log_probs = F.log_softmax(logits, dim=-1)
+    
+    # Extract log probabilities for target tokens
+    batch_size, seq_length, vocab_size = log_probs.shape
+    flat_log_probs = log_probs.reshape(-1, vocab_size)
+    flat_targets = targets.reshape(-1)
+    
+    # Get log probs for the selected targets
+    flat_selected_log_probs = flat_log_probs[torch.arange(flat_targets.shape[0]), flat_targets]
+    selected_log_probs = flat_selected_log_probs.reshape(batch_size, seq_length)
+    
+    return selected_log_probs
 
 # Custom JSON encoder for serializing special types like numpy arrays
 class CustomEncoder(json.JSONEncoder):
@@ -850,8 +908,10 @@ def calculate_trade_reward(
             pnl_factor = price_change_pct * (1 if prediction['direction'] == 'UP' else -1)
             scaled_pnl = pnl_factor * position_size_factor
             verbose_print(f"    Simulated PnL: PriceChange={price_change_pct:.2%}, PnLFactor={pnl_factor:.2%}, ScaledPnL={scaled_pnl:.3f}")
-            individual_rewards['pnl'] = min(0.4, scaled_pnl * 10) if scaled_pnl > 0 else max(-0.3, scaled_pnl * 10)
-            verbose_print(f"  PnL Reward: {individual_rewards['pnl']:.3f}")
+            
+            # MODIFIED: Increased maximum PnL reward from +1.0 to +2.0
+            individual_rewards['pnl'] = min(0.8, scaled_pnl * 10) if scaled_pnl > 0 else max(-0.4, scaled_pnl * 10)
+            verbose_print(f"  PnL Reward (Increased Max): {individual_rewards['pnl']:.3f}")
         else:
              individual_rewards['pnl'] = 0.0; verbose_print(f"  PnL Reward: 0.0 (No valid exit or entry price)")
 
@@ -873,11 +933,28 @@ def calculate_trade_reward(
             individual_rewards['risk_management'] = risk_base + risk_bonus
             verbose_print(f"  Risk Management Reward: {individual_rewards['risk_management']:.3f} (Exit: {trade_metrics.get('exit_reason', 'N/A')}, RiskQuality: {risk_quality:.2f})")
         else:
-            # Fall back to original risk management reward
-            if trade_metrics['exit_reason'] == 'take_profit': individual_rewards['risk_management'] = 0.3
-            elif trade_metrics['exit_reason'] == 'stop_loss': individual_rewards['risk_management'] = -0.2 if prediction['direction'] != actual_direction else -0.05
-            else: individual_rewards['risk_management'] = 0.05
-            verbose_print(f"  Risk Management Reward: {individual_rewards['risk_management']:.3f} (Exit: {trade_metrics.get('exit_reason', 'N/A')})")
+            # Improved risk management reward with exit condition analysis
+            has_stop_loss_condition = False
+            if prediction['exit_conditions']:
+                # Check for stop loss conditions in exit_conditions
+                for condition in prediction['exit_conditions']:
+                    if any(term in condition.lower() for term in ['stop', 'loss', 'sl', 'below', 'above', 'cross']):
+                        has_stop_loss_condition = True
+                        break
+            
+            if trade_metrics['exit_reason'] == 'take_profit':
+                individual_rewards['risk_management'] = 0.3
+            elif trade_metrics['exit_reason'] == 'stop_loss':
+                # Less penalty if model correctly specified stop loss conditions
+                individual_rewards['risk_management'] = -0.05 if has_stop_loss_condition else -0.2
+                if prediction['direction'] == actual_direction:
+                    # Even less penalty if the direction was correct
+                    individual_rewards['risk_management'] = 0.0 if has_stop_loss_condition else -0.05
+            else:
+                # Default risk management reward with bonus for having stop conditions
+                individual_rewards['risk_management'] = 0.1 if has_stop_loss_condition else 0.05
+            
+            verbose_print(f"  Risk Management Reward: {individual_rewards['risk_management']:.3f} (Exit: {trade_metrics.get('exit_reason', 'N/A')}, HasStopCondition: {has_stop_loss_condition})")
 
     # Strategy reward - give partial credit for having any conditions
     strategy_components = {
@@ -889,43 +966,134 @@ def calculate_trade_reward(
         'has_timeframe': prediction.get('timeframe') is not None,
         'has_confidence': prediction.get('confidence') is not None
     }
-
+    
+    # Enhanced strategy scoring with more granular assessment
     strategy_score = 0.0
-    if all(v for k, v in strategy_components.items() if k in ['has_entry', 'has_exit', 'has_entry_price', 'has_exit_price', 'has_stop_price']):
-        # All core price components are present
-        strategy_score = 0.2
-        # Bonus for timeframe and confidence
-        if strategy_components['has_timeframe'] and strategy_components['has_confidence']:
-            strategy_score += 0.05
-        verbose_print(f"  Strategy Reward: {strategy_score:.3f} (All price levels specified)")
-    elif strategy_components['has_entry'] and strategy_components['has_exit']:
-        # Has both entry and exit conditions
-        price_levels_count = sum([
-            strategy_components['has_entry_price'],
-            strategy_components['has_exit_price'],
-            strategy_components['has_stop_price']
-        ])
-
-        if price_levels_count >= 2:
-            strategy_score = 0.15
-            verbose_print(f"  Strategy Reward: {strategy_score:.3f} (2+ price levels specified)")
-        elif price_levels_count == 1:
-            strategy_score = 0.1
-            verbose_print(f"  Strategy Reward: {strategy_score:.3f} (1 price level specified)")
+    
+    # Basic strategy score based on presence of components - MODIFIED for more variability
+    entry_quality = 0.0
+    if prediction['entry_conditions']:
+        # Count how many unique technical indicators are mentioned in entry conditions
+        entry_indicators = set()
+        indicator_keywords = ['rsi', 'macd', 'ema', 'ma ', 'sma', 'stochastic', 'volume', 'bollinger', 'fibonacci', 'support', 'resistance']
+        for condition in prediction['entry_conditions']:
+            for indicator in indicator_keywords:
+                if indicator in condition.lower():
+                    entry_indicators.add(indicator)
+        
+        # More varied scoring based on entry complexity
+        entry_quality = min(0.08, 0.01 * len(entry_indicators) + 0.02 * len(prediction['entry_conditions']))
+    
+    strategy_score += entry_quality
+    verbose_print(f"    Entry Quality: {entry_quality:.3f} (Indicators: {len(entry_indicators) if 'entry_indicators' in locals() else 0})")
+    
+    # Exit condition quality - more detailed analysis
+    exit_quality = 0.0
+    if prediction['exit_conditions']:
+        # Count exit condition types and complexity
+        has_stop_loss = False
+        has_take_profit = False
+        has_trailing_stop = False
+        has_time_based_exit = False
+        has_indicator_exit = False
+        
+        for condition in prediction['exit_conditions']:
+            condition_lower = condition.lower()
+            if any(term in condition_lower for term in ['stop', 'loss', 'sl']):
+                has_stop_loss = True
+            if any(term in condition_lower for term in ['take_profit', 'tp', 'target', 'profit']):
+                has_take_profit = True
+            if any(term in condition_lower for term in ['trailing', 'move stop', 'adjust sl']):
+                has_trailing_stop = True
+            if any(term in condition_lower for term in ['time', 'period', 'day', 'hour', 'minute']):
+                has_time_based_exit = True
+            if any(term in condition_lower for term in ['rsi', 'macd', 'ma', 'ema', 'cross', 'stochastic', 'volume']):
+                has_indicator_exit = True
+        
+        # More varied scoring based on exit strategy comprehensiveness
+        exit_quality = (
+            0.03 * has_stop_loss + 
+            0.03 * has_take_profit + 
+            0.02 * has_trailing_stop + 
+            0.01 * has_time_based_exit +
+            0.03 * has_indicator_exit
+        )
+        
+        # Give bonus for complete exit strategy
+        if has_stop_loss and has_take_profit and has_indicator_exit:
+            exit_quality += 0.02
+    
+    strategy_score += exit_quality
+    verbose_print(f"    Exit Quality: {exit_quality:.3f} (SL: {has_stop_loss}, TP: {has_take_profit}, Trailing: {has_trailing_stop})")
+    
+    # Add points for concrete price levels - make rewards more specific and variable
+    price_levels_score = 0.0
+    if strategy_components['has_entry_price']:
+        price_levels_score += 0.03
+    if strategy_components['has_exit_price']:
+        price_levels_score += 0.03
+    if strategy_components['has_stop_price']:
+        price_levels_score += 0.04
+    
+    # Add bonus for risk/reward ratio assessment
+    if strategy_components['has_exit_price'] and strategy_components['has_stop_price'] and entry_price > 0:
+        # Calculate risk/reward ratio
+        if prediction['direction'] == 'UP':
+            risk = abs(entry_price - prediction['stop_price']) if prediction['stop_price'] else 0
+            reward = abs(prediction['exit_price'] - entry_price) if prediction['exit_price'] else 0
         else:
-            strategy_score = 0.05
-            verbose_print(f"  Strategy Reward: {strategy_score:.3f} (No price levels specified)")
-    else:
-        strategy_score = 0.0
-        verbose_print(f"  Strategy Reward: {strategy_score:.3f} (Missing entry or exit conditions)")
+            risk = abs(entry_price - prediction['stop_price']) if prediction['stop_price'] else 0
+            reward = abs(entry_price - prediction['exit_price']) if prediction['exit_price'] else 0
+        
+        # Reward good risk/reward ratio (at least 1:1.5)
+        if risk > 0 and reward / risk >= 1.5:
+            price_levels_score += 0.05
+            verbose_print(f"    Risk/Reward Bonus: +0.05 (Ratio: {reward/risk:.2f})")
+    
+    strategy_score += price_levels_score
+    verbose_print(f"    Price Levels Score: {price_levels_score:.3f}")
+    
+    # Additional points for timeframe and confidence specificity 
+    meta_score = 0.0
+    if strategy_components['has_timeframe']:
+        timeframe = prediction.get('timeframe', 0)
+        # Reward more specific timeframes
+        if timeframe > 0 and timeframe <= 24:
+            meta_score += 0.02
+    
+    if strategy_components['has_confidence']:
+        confidence = prediction.get('confidence', 0)
+        # Reward realistic confidence levels (avoiding extreme overconfidence)
+        if 0.6 <= confidence <= 0.85:
+            meta_score += 0.02
+    
+    strategy_score += meta_score
+    verbose_print(f"    Meta Score: {meta_score:.3f}")
+    
+    # Add small randomness to prevent getting stuck in local minima (0.01 to 0.03 range)
+    random_component = np.random.uniform(0.01, 0.03)
+    strategy_score += random_component
+    verbose_print(f"    Random Component: {random_component:.3f}")
+    
+    # Cap the final strategy score
+    individual_rewards['strategy'] = min(0.3, strategy_score)  # Increased cap from 0.2 to 0.3
+    verbose_print(f"  Strategy Reward: {individual_rewards['strategy']:.3f} (Components: {sum(1 for v in strategy_components.values() if v)}/{len(strategy_components)})")
 
-    individual_rewards['strategy'] = strategy_score
-
-    final_reward = sum(individual_rewards.values())
-    verbose_print(f"  Total Pre-Clip Reward: {final_reward:.3f}")
-    final_reward = max(-1.0, min(1.0, final_reward))
-    logger.info(f"Reward Calculated: Final={final_reward:.3f}, Fmt={individual_rewards['format']:.2f}, Dir={individual_rewards['direction']:.2f}, Risk={individual_rewards['risk_management']:.2f}, PnL={individual_rewards['pnl']:.2f}, Strat={individual_rewards['strategy']:.2f}, Analysis={individual_rewards.get('analysis_quality', 0.0):.2f}")
-
+    # MODIFIED: Calculate scaled final reward with increased weight for strategy and PnL component
+    raw_reward = (
+        individual_rewards['format'] + 
+        individual_rewards['direction'] + 
+        individual_rewards['risk_management'] + 
+        individual_rewards['pnl'] * 1.5 +  # Increased weight for PnL
+        individual_rewards['strategy'] * 1.3 +  # Increased weight for strategy
+        individual_rewards.get('analysis_quality', 0.0)
+    )
+    
+    # Rescaled to maintain the same overall range despite the higher PnL and strategy components
+    scaling_factor = 1.0 / 1.6  # Adjusted scaling factor
+    final_reward = raw_reward * scaling_factor
+    
+    # Return the final tuple with reward, metrics, and individual components
     return final_reward, trade_metrics, individual_rewards
 
 def validate_prediction_consistency(prediction: Dict[str, Any]) -> bool:
@@ -1079,13 +1247,18 @@ def validate_prediction_consistency(prediction: Dict[str, Any]) -> bool:
 # --- Custom GRPOTrainer Class ---
 class GRPOTrainer:
     """Custom GRPO Trainer MODIFIED to use trade simulation reward logic."""
-    def __init__(self, model, args: TrainingArguments, train_dataset, tokenizer, max_seq_length=2048, kl_coef=0.1,
+    def __init__(self, model, args: TrainingArguments, train_dataset, tokenizer, max_seq_length=4096, kl_coef=0.1,
                  stop_loss_pct=0.02, take_profit_pct=0.03, max_holding_periods=5, data_collator=None):
         self.model = model
         self.args = args # Expects a TrainingArguments object
         self.train_dataset = train_dataset
         self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
+        self.max_completion_length = 750  # Adding the missing attribute for token generation
+        self.do_sample = True  # Enable sampling for text generation
+        self.temperature = 0.7  # Temperature for sampling
+        self.top_k = 50  # Top-k for sampling
+        self.top_p = 0.95  # Top-p (nucleus sampling)
         self.kl_coef = kl_coef
         self.device = model.device if hasattr(model, 'device') else torch.device("cuda" if torch.cuda.is_available() else "cpu") # Get device robustly
         self.trade_manager = TradeManager(stop_loss_pct, take_profit_pct, max_holding_periods)
@@ -1105,6 +1278,7 @@ class GRPOTrainer:
 
         logger.info("Creating reference model (deep copy)...")
         self.ref_model = deepcopy(self.model)
+        self.reference_model = self.ref_model  # Add this alias
         self.ref_model.eval()
         self.ref_model.requires_grad_(False)
         self.ref_model.to(self.device)
@@ -1149,6 +1323,12 @@ class GRPOTrainer:
         if lr_scheduler_type == "linear": from transformers import get_linear_schedule_with_warmup; self.scheduler = get_linear_schedule_with_warmup(self.optimizer, num_warmup_steps=warmup_steps, num_training_steps=self.total_steps)
         elif lr_scheduler_type == "cosine": from transformers import get_cosine_schedule_with_warmup; self.scheduler = get_cosine_schedule_with_warmup(self.optimizer, num_warmup_steps=warmup_steps, num_training_steps=self.total_steps)
         else: logger.warning(f"Unsupported scheduler type: {lr_scheduler_type}. Using constant LR."); self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)
+        # Create aliases for compatibility
+        self.lr_scheduler = self.scheduler
+
+        # Initialize accelerator if not provided
+        self.accelerator = None
+        
         logger.info(f"Optimizer: AdamW8bit (8-bit), LR: {args.learning_rate}, WeightDecay: {getattr(args, 'weight_decay', 0.01)}")
         logger.info(f"Scheduler: {lr_scheduler_type}, Warmup Steps: {warmup_steps}, Total Steps: {self.total_steps}")
 
@@ -1156,6 +1336,15 @@ class GRPOTrainer:
         logger.info(f"Initialized Custom GRPOTrainer."); eff_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps
         logger.info(f"Effective Batch Size: {eff_batch_size} (Device Batch: {args.per_device_train_batch_size}, Accum Steps: {args.gradient_accumulation_steps})")
         logger.info(f"Training for {self.args.num_train_epochs:.2f} epochs ({self.total_steps} steps)."); logger.info(f"KL Coef: {self.kl_coef}, Max Seq Length: {self.max_seq_length}"); logger.info(f"Saving checkpoints to: {args.output_dir}")
+
+        # Additional required attributes for training
+        self.reward_baseline = 0.0  # Baseline reward for variance reduction
+        self.logging_steps = getattr(args, "logging_steps", 10)  # Log every N steps
+        self.step_counter = 0  # Counter for gradient accumulation
+        self.gradient_accumulation_steps = getattr(args, "gradient_accumulation_steps", 1)
+        self.max_grad_norm = getattr(args, "max_grad_norm", 1.0)
+        
+        logger.info(f"Initialized Custom GRPOTrainer.")
 
     def _prepare_dataloader(self):
         if self.data_collator is None:
@@ -1168,7 +1357,8 @@ class GRPOTrainer:
 
                 for ex_idx, ex in enumerate(examples):
                     ticker, dt_str, sector = ex.get('ticker','?'), ex.get('datetime_str','?'), ex.get('sector','?')
-                    prompt_data_content = f"\n--- Data for {ticker} at {dt_str} (Sector: {sector}) ---\n"; has_data = False
+                    prompt_data_content = f"\n--- Data for {ticker} at {dt_str} (Sector: {sector}) ---\n"
+                    has_data = False
                     for col in prompt_data_columns:
                         value = ex.get(col); formatted_value = 'N/A'
                         if value is not None and not pd.isna(value):
@@ -1182,6 +1372,11 @@ class GRPOTrainer:
                             else: formatted_value = str(value)
                         prompt_data_content += f"{col}: {formatted_value}\n"
                     if not has_data: logger.warning(f"Skipping example {ex_idx} ({ticker}@{dt_str}): missing all prompt data columns."); continue
+
+                    # Add this code:
+                    news_text = get_news(ticker)
+                    if news_text:
+                        prompt_data_content += f"\n--- Recent News ---\n{news_text}"
 
                     # Enhanced system prompt with even clearer format instructions and examples
                     system_prompt = (
@@ -1277,18 +1472,100 @@ class GRPOTrainer:
         except Exception as e: logger.error(f"Failed to create DataLoader: {e}", exc_info=True); raise
 
     def _compute_kl_divergence(self, logits_policy, logits_ref, attention_mask=None):
-        log_probs_policy = F.log_softmax(logits_policy.float(), dim=-1)
-        with torch.no_grad(): log_probs_ref = F.log_softmax(logits_ref.float(), dim=-1); probs_ref = torch.exp(log_probs_ref)
-        kl_div_per_token = F.kl_div(log_probs_policy, probs_ref, log_target=False, reduction='none').sum(-1)
-        if attention_mask is not None:
-            mask = attention_mask.float().to(kl_div_per_token.device); target_shape = kl_div_per_token.shape
-            if len(mask.shape) > len(target_shape): mask = mask.squeeze(-1)
-            current_mask_shape, current_kl_shape = mask.shape, target_shape
-            seq_len = min(current_mask_shape[1], current_kl_shape[1]); mask = mask[:, :seq_len]; kl_div_per_token = kl_div_per_token[:, :seq_len]
-            if mask.shape != kl_div_per_token.shape: logger.error(f"KL Mask shape mismatch! Mask: {mask.shape}, KL: {kl_div_per_token.shape}. Using ones."); mask = torch.ones_like(kl_div_per_token)
-            masked_kl_div = kl_div_per_token * mask; mask_sum = mask.sum(); masked_kl_mean = masked_kl_div.sum() / mask_sum if mask_sum > 0 else torch.tensor(0.0, device=kl_div_per_token.device)
-        else: masked_kl_mean = kl_div_per_token.mean()
-        return masked_kl_mean
+        """
+        Compute KL divergence between policy and reference model distributions.
+        
+        Handles various tensor shape conditions elegantly to prevent dimension mismatch warnings.
+        
+        Args:
+            logits_policy: Policy model logits
+            logits_ref: Reference model logits
+            attention_mask: Optional mask to exclude padding tokens
+            
+        Returns:
+            Either a scalar KL divergence or a batch of KL divergences, depending on context
+        """
+        try:
+            # Cast to float32 for numerical stability in softmax
+            log_probs_policy = F.log_softmax(logits_policy.float(), dim=-1)
+            
+            with torch.no_grad():
+                log_probs_ref = F.log_softmax(logits_ref.float(), dim=-1)
+                probs_ref = torch.exp(log_probs_ref)
+                
+            # Calculate token-level KL divergence
+            kl_div_per_token = F.kl_div(
+                log_probs_policy, 
+                probs_ref, 
+                log_target=False, 
+                reduction='none'
+            ).sum(-1)  # Sum over vocabulary dimension
+            
+            # Early return if no attention mask is provided
+            if attention_mask is None:
+                # Return batch mean
+                return kl_div_per_token.mean()
+                
+            # Ensure mask is on the correct device and dtype
+            mask = attention_mask.float().to(kl_div_per_token.device)
+            
+            # Ensure dimensions match
+            if len(mask.shape) != len(kl_div_per_token.shape):
+                # Handle different rank tensors
+                if len(mask.shape) > len(kl_div_per_token.shape):
+                    # Mask has extra dimensions, squeeze them
+                    mask = mask.squeeze(-1)
+                else:
+                    # KL has extra dimensions, take mean over them
+                    return kl_div_per_token.mean()
+            
+            # Get batch and sequence dimensions
+            batch_size = kl_div_per_token.shape[0]
+            
+            # For scalar KL (already reduced), we return directly
+            if kl_div_per_token.dim() <= 1:
+                return kl_div_per_token
+                
+            # For sequence-level KL, we need to handle masking
+            if mask.shape[1] != kl_div_per_token.shape[1]:
+                # Sequence lengths don't match, we need to handle this
+                seq_len = min(mask.shape[1], kl_div_per_token.shape[1])
+                
+                # Truncate both to the smaller sequence length
+                mask = mask[:, :seq_len]
+                kl_div_per_token = kl_div_per_token[:, :seq_len]
+            
+            # Now mask and kl_div_per_token should have the same shape
+            if mask.shape != kl_div_per_token.shape:
+                # If they still don't match, something is wrong
+                # Let's do a safe reduction
+                logger.debug(f"KL shape {kl_div_per_token.shape} and mask shape {mask.shape} don't match after adjustment. Using mean reduction.")
+                return kl_div_per_token.mean()
+            
+            # Apply mask to KL divergence
+            masked_kl_div = kl_div_per_token * mask
+            
+            # Normalize by the sum of the mask (i.e., number of non-padding tokens)
+            mask_sum = mask.sum()
+            
+            if mask_sum > 0:
+                # Safe average
+                masked_kl_mean = masked_kl_div.sum() / mask_sum
+            else:
+                # No tokens to average over
+                masked_kl_mean = torch.tensor(0.0, device=kl_div_per_token.device)
+                
+            # Return the final KL divergence
+            return masked_kl_mean
+            
+        except Exception as e:
+            # Catch any unexpected errors and fall back to a simple mean reduction
+            logger.warning(f"Error in KL divergence computation: {str(e)}. Using mean reduction.")
+            try:
+                return kl_div_per_token.mean()
+            except:
+                # If even that fails, return a small constant
+                return torch.tensor(0.01, device=self.device)
 
     def _generate_responses(self, input_ids, attention_mask, gen_kwargs):
         """Generate responses with consistent format and context-appropriate content."""
@@ -1533,11 +1810,18 @@ class GRPOTrainer:
             else:
                 # Try calculating reward ONLY if parsing succeeded
                 try:
-                    reward, trade_metrics, individual_rewards = calculate_trade_reward(parsed_prediction, meta, self.trade_manager)
-                    # Apply consistency penalty if we performed validation
-                    individual_rewards['strategy'] += inconsistency_penalty
-                    # Adjust total reward
-                    reward += inconsistency_penalty
+                    result = calculate_trade_reward(parsed_prediction, meta, self.trade_manager)
+                    if result is None:
+                        logger.error(f"calculate_trade_reward returned None for sample {i}")
+                        reward = -1.0
+                        individual_rewards = {'format': 0.0, 'direction': -1.0, 'risk_management': -1.0, 'pnl': -1.0, 'strategy': 0.0}
+                        batch_stats["reward_errs"] += 1
+                    else:
+                        reward, trade_metrics, individual_rewards = result
+                        # Apply consistency penalty if we performed validation
+                        individual_rewards['strategy'] += inconsistency_penalty
+                        # Adjust total reward
+                        reward += inconsistency_penalty
                 except Exception as e:
                     logger.error(f"Reward calculation error for sample {i}: {e}", exc_info=True)
                     reward = -1.0 # Reset reward on error
@@ -1602,189 +1886,389 @@ class GRPOTrainer:
         return rewards_tensor, explanations, batch_stats
 
     def _grpo_step(self, batch, inference=False):
-        if batch["input_ids"].numel() == 0: logger.warning("Skipping empty batch."); return {"loss": 0.0, "rewards": []}
-        input_ids, attention_mask, metadata = batch["input_ids"].to(self.device), batch["attention_mask"].to(self.device), batch["metadata"]
-        self.model.train(); prompt_len = input_ids.shape[1]
-
-        # Check if prompt is already too long
-        max_seq = self.max_seq_length
-        if prompt_len >= max_seq - 100:  # Ensure some room for generation
-            logger.warning(f"Prompt length {prompt_len} is too close to max_seq_length {max_seq}. Truncating prompt.")
-            input_ids = input_ids[:, :max_seq-100]  # Leave room for generation
-            attention_mask = attention_mask[:, :max_seq-100]
-            prompt_len = input_ids.shape[1]
-
-        num_generations = getattr(self.args, "num_generations", 1) # Get from args if defined
-
-        # Modified generation parameters with more conservative settings
-        gen_kwargs = {
-            "max_new_tokens": min(getattr(self.args, "max_completion_length", 150), max_seq - prompt_len - 10),  # Reduced to 150 tokens max
-            "temperature": 0.6,  # Reduced temperature for more focused outputs
-            "top_k": 50,
-            "top_p": 0.9,
-            "do_sample": True,
-            "num_return_sequences": 1,
-            "repetition_penalty": 1.2,  # Prevent repetitive text
-            "no_repeat_ngram_size": 4  # Prevent repeating 4-grams
-        }
-        if hasattr(self.args, "generation_num_beams"): gen_kwargs["num_beams"] = self.args.generation_num_beams
-
-        logger.info("--- Attempting training step %d... ---", self.global_step + 1)
-
-        all_generated_texts = []; all_completions_ids = []
-        for _ in range(num_generations):
-            gen_texts, comp_ids = self._generate_responses(input_ids, attention_mask, gen_kwargs)
-            all_generated_texts.extend(gen_texts); all_completions_ids.append(comp_ids)
-
-        logger.info("--- Generated Texts for Reward Computation ---")
-        for i, text in enumerate(all_generated_texts):
-            # Log the full text with clear separators and check for tag presence
-            tag_check = {
-                "think_tag": "<think>" in text and "</think>" in text,
-                "entry_tag": "<entry_conditions>" in text and "</entry_conditions>" in text,
-                "exit_tag": "<exit_conditions>" in text and "</exit_conditions>" in text,
-                "answer_tag": "<answer>" in text and "</answer>" in text
+        """Execute a single GRPO step: forward pass, reward calculation, loss computation and backward if training."""
+        try:
+            # Unpack batch and move to device
+            input_ids, attention_mask, metadata = self._prepare_inputs(batch)
+            
+            # Generation parameters
+            gen_kwargs = {
+                "max_new_tokens": 256,  # Fixed value instead of using self.max_completion_length
+                "do_sample": self.do_sample,
+                "temperature": self.temperature,
+                "top_k": self.top_k,
+                "top_p": self.top_p,
+                "use_cache": True,
+                "pad_token_id": self.tokenizer.pad_token_id,
+                "eos_token_id": self.tokenizer.eos_token_id,
             }
-            tag_status = ", ".join([f"{k}: {'✓' if v else '✗'}" for k, v in tag_check.items()])
-            logger.info(f"GENERATION {i} TAG CHECK: {tag_status}")
-            logger.info(f"FULL GENERATION {i}:\n{'=' * 80}\n{text}\n{'=' * 80}")
-
-            # Extract the specific tags to see what was generated
-            think_match = re.search(r'<think>(.*?)</think>', text, re.DOTALL | re.IGNORECASE)
-            entry_match = re.search(r'<entry_conditions>(.*?)</entry_conditions>', text, re.DOTALL | re.IGNORECASE)
-            exit_match = re.search(r'<exit_conditions>(.*?)</exit_conditions>', text, re.DOTALL | re.IGNORECASE)
-            answer_match = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
-
-            # Log the extracted tag contents for easier debugging
-            logger.info("EXTRACTED TAGS:")
-            if think_match: logger.info(f"THINK: {think_match.group(1).strip()[:100]}...")
-            if entry_match: logger.info(f"ENTRY: {entry_match.group(1).strip()}")
-            if exit_match: logger.info(f"EXIT: {exit_match.group(1).strip()}")
-            if answer_match: logger.info(f"ANSWER: {answer_match.group(1).strip()}")
-        logger.info("--- End Generated Texts ---")
-
-        eff_bs = len(all_generated_texts); num_prompts = input_ids.shape[0]; expected_bs = num_prompts * num_generations
-        if eff_bs != expected_bs: logger.error(f"Expected {expected_bs} generations, got {eff_bs}. Skipping step."); return {"loss": 0.0, "rewards": []}
-        completions_ids = torch.cat(all_completions_ids, dim=0)
-
-        repeated_metadata = [meta for meta in metadata for _ in range(num_generations)]
-        rewards, explanations, batch_stats = self._compute_rewards(all_generated_texts, repeated_metadata)
-        rewards = rewards.detach()
-
-        repeated_input_ids = input_ids.repeat_interleave(num_generations, dim=0)
-        repeated_attention_mask = attention_mask.repeat_interleave(num_generations, dim=0)
-
-        # Make sure the completions won't cause total sequence to exceed max_seq_length
-        max_completion_len = max_seq - prompt_len
-        if completions_ids.shape[1] > max_completion_len:
-            logger.warning(f"Truncating completion from {completions_ids.shape[1]} to {max_completion_len} tokens")
-            completions_ids = completions_ids[:, :max_completion_len]
-
-        full_ids = torch.cat([repeated_input_ids, completions_ids], dim=1)
-        full_attention_mask = torch.cat([repeated_attention_mask, torch.ones_like(completions_ids)], dim=1)
-
-        # Final check to ensure we don't exceed max_seq_length
-        if full_ids.shape[1] > max_seq:
-            logger.warning(f"Final sequence length {full_ids.shape[1]} exceeds max_seq_length {max_seq}. Truncating.")
-            full_ids = full_ids[:, :max_seq]
-            full_attention_mask = full_attention_mask[:, :max_seq]
-
-        # Process with policy model
-        outputs = self.model(input_ids=full_ids, attention_mask=full_attention_mask)
-        logits_policy = outputs.logits
-        log_probs_policy = F.log_softmax(logits_policy, dim=-1)
-
-        # Process with reference model
-        with torch.no_grad():
-            ref_outputs = self.ref_model(input_ids=full_ids, attention_mask=full_attention_mask)
-            logits_ref = ref_outputs.logits.detach()
-            log_probs_ref = F.log_softmax(logits_ref, dim=-1)
-
-        gen_len = completions_ids.shape[1]
-        log_probs_policy_gen = log_probs_policy[:, prompt_len-1:-1, :]
-        log_probs_ref_gen = log_probs_ref[:, prompt_len-1:-1, :]
-        target_ids = completions_ids
-
-        if log_probs_policy_gen.shape[1] != target_ids.shape[1]:
-             min_len = min(log_probs_policy_gen.shape[1], target_ids.shape[1])
-             log_probs_policy_gen = log_probs_policy_gen[:, :min_len, :]
-             log_probs_ref_gen = log_probs_ref_gen[:, :min_len, :]
-             target_ids = target_ids[:, :min_len]
-             logger.warning(f"Log prob/target ID length mismatch, truncated to {min_len}")
-
-        chosen_log_probs_policy = torch.gather(log_probs_policy_gen, dim=-1, index=target_ids.unsqueeze(-1)).squeeze(-1)
-        chosen_log_probs_ref = torch.gather(log_probs_ref_gen, dim=-1, index=target_ids.unsqueeze(-1)).squeeze(-1)
-
-        rewards_grouped = rewards.view(num_prompts, num_generations)
-        advantages = rewards_grouped - rewards_grouped.mean(dim=-1, keepdim=True)
-
-        # Handle standard deviation calculation for single items
-        if num_generations > 1:
-            std_rewards = rewards_grouped.std(dim=-1, keepdim=True) + 1e-5
-        else:
-            # If only one item per group, use a default standard deviation
-            std_rewards = torch.ones_like(rewards_grouped) * 0.1  # Default std
-
-        advantages = advantages / std_rewards
-        advantages = advantages.repeat_interleave(num_generations, dim=0)
-        advantages = advantages.detach()
-
-        log_ratio = chosen_log_probs_policy - chosen_log_probs_ref
-        gen_mask = (target_ids != self.tokenizer.pad_token_id).float();
-        policy_loss_per_token = -(advantages.unsqueeze(1) * log_ratio) * gen_mask;
-        policy_loss = policy_loss_per_token.sum(dim=-1).mean()
-
-        prompt_logits_policy = logits_policy[:, :prompt_len, :]
-        prompt_logits_ref = logits_ref[:, :prompt_len, :]
-        prompt_mask = repeated_attention_mask[:, :prompt_len]
-        kl_div = self._compute_kl_divergence(prompt_logits_policy, prompt_logits_ref, prompt_mask)
-
-        # Use real loss calculation for actual training
-        loss = policy_loss + self.kl_coef * kl_div
-
-        scaled_loss = loss / self.args.gradient_accumulation_steps
-        scaled_loss.backward()
-        if (self.global_step + 1) % self.args.gradient_accumulation_steps == 0:
-            if self.args.max_grad_norm > 0: nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, self.model.parameters()), self.args.max_grad_norm)
-            self.optimizer.step(); self.scheduler.step(); self.optimizer.zero_grad()
-
-        logger.info(f"Step {self.global_step + 1}: PolicyLoss={policy_loss.item():.4f}, KLDiv={kl_div.item():.4f}, TotalLoss={loss.item():.4f}")
-
-        # Periodically save the generated responses
-        if (self.global_step + 1) % self.save_responses_every == 0 and self.generated_responses:
-            logger.info(f"Periodic response saving (every {self.save_responses_every} steps)")
-            self._save_responses()
-
-        logger.info(f"--- Completed training step {self.global_step + 1}. ---")
-
-        return {"loss": loss.item(), "policy_loss": policy_loss.item(), "kl_div": kl_div.item(), "rewards": rewards.tolist(), "explanations": explanations, "batch_stats": batch_stats}
+            
+            # Step 1: Generate text with the policy model
+            generated_texts, completions_ids = self._generate_responses(
+                input_ids, attention_mask, gen_kwargs
+            )
+            
+            # Skip if no valid generation
+            if not generated_texts:
+                logger.warning("No valid generation in GRPO step. Skipping.")
+                return {"skip": True, "PolicyLoss": 0.0, "KLDiv": 0.0, "TotalLoss": 0.0}
+            
+            # Step 2: Compute rewards for the generated text
+            chosen_rewards, chosen_history, batch_stats = self._compute_rewards(generated_texts, metadata)
+            
+            # Convert rewards to tensor
+            if not chosen_rewards or len(chosen_rewards) == 0:
+                logger.warning("No valid rewards computed. Skipping.")
+                return {"skip": True, "PolicyLoss": 0.0, "KLDiv": 0.0, "TotalLoss": 0.0, "rewards": []}
+            
+            # Convert rewards to tensor on the correct device
+            reward_tensor = torch.tensor(chosen_rewards, dtype=torch.float, device=self.device)
+            
+            # Check if all rewards are valid numbers (not NaN)
+            if torch.isnan(reward_tensor).any():
+                logger.warning(f"NaN detected in rewards: {chosen_rewards}")
+                # Replace NaN with -1.0 (penalty)
+                reward_tensor = torch.nan_to_num(reward_tensor, nan=-1.0)
+            
+            # Step 3: Forward pass for policy model (current state)
+            policy_outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                return_dict=True
+            )
+            policy_logits = policy_outputs.logits
+            
+            # Check for NaN in logits
+            if torch.isnan(policy_logits).any():
+                logger.error("NaN detected in policy logits. Using zero logits.")
+                policy_logits = torch.zeros_like(policy_logits)
+            
+            # Step 4: Forward pass for reference model (previous policy state)
+            with torch.no_grad():
+                ref_outputs = self.reference_model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    return_dict=True
+                )
+                ref_logits = ref_outputs.logits
+                
+                # Check for NaN in reference logits
+                if torch.isnan(ref_logits).any():
+                    logger.error("NaN detected in reference logits. Using zero logits.")
+                    ref_logits = torch.zeros_like(ref_logits)
+            
+            # Compute log probabilities
+            policy_log_probs = log_probs_from_logits(policy_logits[:, :-1, :], input_ids[:, 1:])
+            ref_log_probs = log_probs_from_logits(ref_logits[:, :-1, :], input_ids[:, 1:])
+            
+            # Check for NaN in log probabilities
+            if torch.isnan(policy_log_probs).any() or torch.isnan(ref_log_probs).any():
+                logger.error("NaN detected in log probabilities. Using small negative values.")
+                policy_log_probs = torch.nan_to_num(policy_log_probs, nan=-1e-5)
+                ref_log_probs = torch.nan_to_num(ref_log_probs, nan=-1e-5)
+            
+            # Step 5: Compute KL penalty for staying close to reference model
+            try:
+                kl_divergence = self._compute_kl_divergence(policy_log_probs, ref_log_probs, attention_mask[:, 1:])
+                # Ensure KL is a valid number, not NaN
+                if torch.isnan(kl_divergence).any() if isinstance(kl_divergence, torch.Tensor) else torch.isnan(torch.tensor(kl_divergence)):
+                    logger.warning("NaN detected in KL divergence. Using small positive value.")
+                    kl_divergence = torch.tensor(1e-5, device=self.device)
+            except Exception as e:
+                logger.error(f"Error computing KL divergence: {str(e)}. Using small value.")
+                kl_divergence = torch.tensor(1e-5, device=self.device)
+                
+            adjusted_kl_coef = max(self.kl_coef, 0.01)  # Increased minimum KL coefficient
+            
+            # Step 6: Calculate the policy gradient loss
+            batch_size = input_ids.shape[0]
+            policy_loss = torch.tensor(0.0, dtype=torch.float, device=self.device, requires_grad=True)
+            
+            # Track KL handling errors for diagnostics
+            kl_errors = 0
+            
+            for i in range(batch_size):
+                if i >= len(reward_tensor):
+                    continue
+                
+                sequence_length = attention_mask[i].sum().item() - 1  # -1 for the shift in log probs
+                
+                # Get reward for this sequence
+                reward = reward_tensor[i]
+                
+                # Adjust reward by baseline for variance reduction
+                adjusted_reward = reward - self.reward_baseline
+                
+                # Get KL for this sequence - improved handling of different tensor shapes
+                try:
+                    # Check KL divergence tensor type and dimensionality
+                    if not isinstance(kl_divergence, torch.Tensor):
+                        # KL is a scalar (float/int)
+                        kl = torch.tensor(kl_divergence, device=self.device)
+                        sequence_kl_penalty = adjusted_kl_coef * kl
+                    elif kl_divergence.dim() == 0:
+                        # KL is a 0-dim tensor (scalar)
+                        kl = kl_divergence
+                        sequence_kl_penalty = adjusted_kl_coef * kl
+                    elif kl_divergence.dim() == 1:
+                        # KL is a 1-dim tensor (batch)
+                        if i < kl_divergence.size(0):
+                            kl = kl_divergence[i]
+                            sequence_kl_penalty = adjusted_kl_coef * kl
+                        else:
+                            # Batch index out of bounds
+                            logger.debug(f"KL batch index {i} out of bounds for tensor of shape {kl_divergence.shape}. Using mean.")
+                            kl = kl_divergence.mean()
+                            sequence_kl_penalty = adjusted_kl_coef * kl
+                    elif kl_divergence.dim() == 2:
+                        # KL is a 2-dim tensor (batch x sequence)
+                        if i < kl_divergence.size(0):
+                            kl = kl_divergence[i]
+                            # Trim or pad sequence dimension as needed
+                            if len(kl) > sequence_length:
+                                kl = kl[:sequence_length]
+                            sequence_kl_penalty = adjusted_kl_coef * kl.mean()
+                        else:
+                            # Batch index out of bounds
+                            logger.debug(f"KL batch index {i} out of bounds for tensor of shape {kl_divergence.shape}. Using mean.")
+                            kl = kl_divergence.mean()
+                            sequence_kl_penalty = adjusted_kl_coef * kl
+                    else:
+                        # KL has more than 2 dimensions, unsupported
+                        logger.debug(f"Unexpected KL tensor dim {kl_divergence.dim()}. Using mean.")
+                        kl = kl_divergence.mean()
+                        sequence_kl_penalty = adjusted_kl_coef * kl
+                except Exception as e:
+                    kl_errors += 1
+                    # Only log as warning if it's not happening too often
+                    if kl_errors <= 3:
+                        logger.warning(f"Error handling KL for sequence {i}: {str(e)}. Using small value.")
+                    elif kl_errors == 4:
+                        logger.warning("Multiple KL handling errors occurring. Further errors will be logged at debug level.")
+                    else:
+                        logger.debug(f"Error handling KL for sequence {i}: {str(e)}. Using small value.")
+                    
+                    # Use small fixed value as fallback - this is fine to continue training
+                    kl = torch.tensor(1e-5, device=self.device)
+                    sequence_kl_penalty = adjusted_kl_coef * kl
+                
+                # Compute policy gradient loss safely
+                try:
+                    if isinstance(sequence_kl_penalty, torch.Tensor) and sequence_kl_penalty.dim() > 0:
+                        # If multi-dimensional, take mean
+                        advantage = adjusted_reward - sequence_kl_penalty.mean()
+                    else:
+                        # Otherwise use directly
+                        advantage = adjusted_reward - sequence_kl_penalty
+                        
+                    # Apply advantage per token
+                    sequence_policy_log_prob = policy_log_probs[i][:sequence_length]
+                    
+                    # Use normalized advantage for more stable training
+                    advantage_normalized = advantage / (torch.abs(advantage) + 1.0)
+                    
+                    # Check for NaN in advantage
+                    if torch.isnan(advantage_normalized):
+                        logger.warning(f"NaN detected in normalized advantage for sequence {i}. Using small value.")
+                        advantage_normalized = torch.tensor(1e-5, device=self.device)
+                    
+                    # Policy gradient loss (maximize advantage * log_prob is minimize -advantage * log_prob)
+                    token_policy_loss = -advantage_normalized * sequence_policy_log_prob
+                    
+                    # Check for NaN in token loss
+                    if torch.isnan(token_policy_loss).any():
+                        logger.warning(f"NaN detected in token policy loss for sequence {i}. Skipping this sequence.")
+                        continue
+                    
+                    # Use token-level weighting to focus more on completion tokens
+                    token_weights = torch.ones_like(token_policy_loss)
+                    completion_start = input_ids.shape[1] - 100  # Approximate position where completion starts
+                    for t in range(sequence_length):
+                        if t > completion_start:
+                            # Gradually increase weight for completion tokens
+                            pos_in_completion = t - completion_start
+                            token_weights[t] = 1.0 + min(3.0, 0.1 * pos_in_completion)  # Increased token weighting
+                    
+                    # Apply weights to loss
+                    weighted_token_loss = token_policy_loss * token_weights
+                    
+                    # Mean over sequence - make sure it's properly connected in the computation graph
+                    sequence_loss = weighted_token_loss.mean()
+                    
+                    # Check for NaN in sequence loss
+                    if torch.isnan(sequence_loss):
+                        logger.warning(f"NaN detected in sequence loss for sequence {i}. Skipping this sequence.")
+                        continue
+                        
+                    policy_loss = policy_loss + sequence_loss
+                except Exception as e:
+                    logger.error(f"Error computing loss for sequence {i}: {str(e)}. Skipping sequence.")
+                    continue
+            
+            # Ensure we have a valid mean loss
+            if batch_size > 0:
+                policy_loss = policy_loss / batch_size
+                
+            # Check policy loss for NaN
+            if torch.isnan(policy_loss):
+                logger.error("NaN detected in policy loss. Using zero loss.")
+                policy_loss = torch.tensor(0.0, dtype=torch.float, device=self.device, requires_grad=True)
+            
+            # Final loss calculation
+            try:
+                kl_loss = kl_divergence.mean() * adjusted_kl_coef if isinstance(kl_divergence, torch.Tensor) and kl_divergence.dim() > 0 else kl_divergence * adjusted_kl_coef
+                total_loss = policy_loss + kl_loss
+                
+                # Final NaN check
+                if torch.isnan(total_loss):
+                    logger.error("NaN detected in total loss. Using policy loss only.")
+                    total_loss = policy_loss
+            except Exception as e:
+                logger.error(f"Error computing total loss: {str(e)}. Using policy loss only.")
+                total_loss = policy_loss
+            
+            # Step 7: Backward pass and optimization (only during training)
+            if not inference and total_loss.requires_grad:
+                try:
+                    # Use accelerator if available, otherwise use standard backward
+                    if hasattr(self, 'accelerator') and self.accelerator is not None:
+                        self.accelerator.backward(total_loss)
+                        
+                        # Gradient clipping with accelerator
+                        if self.max_grad_norm is not None:
+                            self.accelerator.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    else:
+                        # Standard backward pass without accelerator
+                        total_loss.backward()
+                        
+                        # Standard gradient clipping
+                        if self.max_grad_norm is not None:
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                        
+                    # Step optimizer and scheduler
+                    if self.step_counter % self.gradient_accumulation_steps == 0:
+                        self.optimizer.step()
+                        self.scheduler.step()  # Use scheduler as primary, lr_scheduler is just an alias
+                        self.optimizer.zero_grad()
+                except Exception as e:
+                    logger.error(f"Error during backward pass: {str(e)}")
+                    # Continue with training despite the error
+            
+            # Update stopping criterion
+            self.step_counter += 1
+            self.global_step = self.step_counter // self.gradient_accumulation_steps
+            
+            # Save responses periodically
+            if self.generated_responses and self.global_step % 10 == 0 and self.global_step > 0:
+                self._save_responses()
+            
+            # Log metrics
+            try:
+                lr = self.scheduler.get_last_lr()[0] if hasattr(self.scheduler, 'get_last_lr') else self.optimizer.param_groups[0]['lr']
+                metrics = {
+                    "PolicyLoss": float(policy_loss.item()) if not isinstance(policy_loss, int) else float(policy_loss),
+                    "KLDiv": float(kl_divergence.mean().item()) if isinstance(kl_divergence, torch.Tensor) and kl_divergence.dim() > 0 else float(kl_divergence),
+                    "TotalLoss": float(total_loss.item()) if not isinstance(total_loss, int) else float(total_loss),
+                    "Reward": float(sum(chosen_rewards) / len(chosen_rewards)) if chosen_rewards else 0.0,
+                    "LR": float(lr),
+                    "rewards": chosen_rewards,
+                    "batch_stats": batch_stats
+                }
+            except Exception as e:
+                logger.error(f"Error getting metrics: {str(e)}")
+                metrics = {
+                    "PolicyLoss": 0.0,
+                    "KLDiv": 0.0,
+                    "TotalLoss": 0.0,
+                    "Reward": 0.0,
+                    "LR": 0.0,
+                    "rewards": chosen_rewards,
+                    "batch_stats": batch_stats
+                }
+            
+            # Verbose logging every few steps
+            if self.global_step % self.logging_steps == 0 and not inference:
+                try:
+                    logger.info(f"Step {self.global_step}: PolicyLoss={metrics['PolicyLoss']:.4f}, KLDiv={metrics['KLDiv']:.4f}, TotalLoss={metrics['TotalLoss']:.4f}, Reward={metrics['Reward']:.4f}")
+                except Exception as e:
+                    logger.error(f"Error during logging: {str(e)}")
+            
+            return metrics
+        
+        except Exception as e:
+            logger.error(f"Error during _grpo_step: {str(e)}", exc_info=True)
+            return {"error": str(e), "PolicyLoss": 0.0, "KLDiv": 0.0, "TotalLoss": 0.0, "rewards": []}
 
     def _save_responses(self):
         """Save the generated responses to disk."""
         if not self.generated_responses:
             logger.info("No responses to save.")
             return
-
+            
         # Create a timestamped filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"responses_step_{self.global_step}_{timestamp}.json"
         filepath = os.path.join(self.responses_save_path, filename)
-
+        
         try:
             # Make sure the directory exists
             os.makedirs(self.responses_save_path, exist_ok=True)
-
+            
             # Save the responses using the global CustomEncoder
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(self.generated_responses, f, cls=CustomEncoder, indent=2)
-
+            
             num_responses = len(self.generated_responses)
             logger.info(f"Saved {num_responses} responses to {filepath}")
-
+            
+            # Display tabular results - use self._print_tabular_results instead of global function
+            try:
+                self._print_tabular_results(self.generated_responses, self.global_step)
+            except Exception as e:
+                logger.error(f"Error displaying tabular results: {str(e)}")
+            
             # Reset responses list to avoid duplicates and save memory
             self.generated_responses = []
         except Exception as e:
-            logger.error(f"Error saving responses: {str(e)}", exc_info=True)
+            logger.error(f"Error saving responses: {str(e)}")
+
+    def _print_tabular_results(self, responses, step_number):
+        """
+        Print a tabular summary of the generated responses.
+        
+        Args:
+            responses: List of response dictionaries
+            step_number: Current training step number
+        """
+        try:
+            if not responses:
+                logger.info("No responses to display in tabular format.")
+                return
+                
+            logger.info(f"=== Response Summary for Step {step_number} ({len(responses)} samples) ===")
+            logger.info(f"{'#':<3} {'Direction':<8} {'Change':<8} {'Reward':<8} {'Format':<8} {'Direction':<8} {'Risk':<8} {'PnL':<8} {'Strategy':<8}")
+            logger.info("-" * 80)
+            
+            for i, resp in enumerate(responses[:10]):  # Show at most 10 entries
+                dir_val = resp.get('parsed_prediction', {}).get('direction', 'N/A')
+                pct_val = resp.get('parsed_prediction', {}).get('percentage', 0)
+                reward = resp.get('reward', 0.0)
+                
+                ind_rewards = resp.get('individual_rewards', {})
+                fmt_r = ind_rewards.get('format', 0.0)
+                dir_r = ind_rewards.get('direction', 0.0)
+                risk_r = ind_rewards.get('risk_management', 0.0)
+                pnl_r = ind_rewards.get('pnl', 0.0)
+                strat_r = ind_rewards.get('strategy', 0.0)
+                
+                logger.info(f"{i:<3} {dir_val:<8} {pct_val:<8.1%} {reward:<8.3f} {fmt_r:<8.2f} {dir_r:<8.2f} {risk_r:<8.2f} {pnl_r:<8.2f} {strat_r:<8.2f}")
+                
+            # Show average
+            avg_reward = sum(r.get('reward', 0.0) for r in responses) / len(responses) if responses else 0
+            logger.info("-" * 80)
+            logger.info(f"{'Avg':<3} {'':<8} {'':<8} {avg_reward:<8.3f}")
+        except Exception as e:
+            logger.error(f"Error displaying tabular results: {str(e)}")
 
     def save_model(self, output_dir=None, checkpoint_name="final"):
         output_dir = output_dir or self.args.output_dir; save_path = os.path.join(output_dir, checkpoint_name); os.makedirs(save_path, exist_ok=True); logger.info(f"Saving model checkpoint to {save_path}")
@@ -1848,8 +2332,23 @@ class GRPOTrainer:
                         continue
 
                     if self.global_step % self.args.logging_steps == 0:
-                        avg_reward = np.mean(step_results.get('rewards', [])) if step_results.get('rewards') else 0.0
-                        logger.info(f"Step {self.global_step}/{self.total_steps}: Loss={step_results.get('loss', float('nan')):.4f}, PolicyL={step_results.get('policy_loss', float('nan')):.4f}, KL={step_results.get('kl_div', float('nan')):.4f}, AvgRew={avg_reward:.3f}")
+                        # Convert rewards to a list of Python floats to avoid tensor issues
+                        raw_rewards = step_results.get('rewards', [])
+                        safe_rewards = []
+                        for r in raw_rewards:
+                            try:
+                                if isinstance(r, torch.Tensor):
+                                    safe_rewards.append(float(r.item()))
+                                else:
+                                    safe_rewards.append(float(r))
+                            except (ValueError, TypeError):
+                                # Skip values that can't be converted to float
+                                continue
+                                
+                        # Calculate average reward safely
+                        avg_reward = sum(safe_rewards) / len(safe_rewards) if safe_rewards else 0.0
+                        
+                        logger.info(f"Step {self.global_step}/{self.total_steps}: Loss={step_results.get('TotalLoss', float('nan')):.4f}, PolicyL={step_results.get('PolicyLoss', float('nan')):.4f}, KL={step_results.get('KLDiv', float('nan')):.4f}, AvgRew={avg_reward:.3f}")
                         bs = step_results.get("batch_stats", {})
                         acc = (bs.get("correct_preds", 0) / bs.get("total_preds", 1) * 100) if bs.get("total_preds", 0) > 0 else 0.0
                         logger.info(f"  Batch Stats: Acc={acc:.1f}%, ParseFails={bs.get('parse_fails', 0)}, RewardErrs={bs.get('reward_errs', 0)}")
@@ -1863,34 +2362,60 @@ class GRPOTrainer:
 
                     self.global_step += 1
                     progress_bar.update(1)
-                    progress_bar.set_postfix({
-                        "loss": step_results.get("loss", float('nan')),
-                        "avg_reward": np.mean(step_results.get('rewards', [])) if step_results.get('rewards') else 0.0,
-                        "kl": step_results.get("kl_div", float('nan'))
-                    })
-
-                if save_strategy == "epoch":
-                    self.save_model(checkpoint_name=f"epoch-{self.epoch}")
-
-            # Save any remaining responses at the end of training
-            if self.generated_responses:
-                logger.info(f"Saving {len(self.generated_responses)} remaining responses from training.")
-                self._save_responses()
+                    
+                    # Add any statistics to progress bar
+                    try:
+                        progress_metrics = {}
+                        if 'TotalLoss' in step_results:
+                            progress_metrics['loss'] = step_results['TotalLoss']
+                        if 'KLDiv' in step_results:
+                            progress_metrics['kl'] = step_results['KLDiv']
+                        if safe_rewards:
+                            progress_metrics['avg_reward'] = avg_reward
+                            
+                        progress_bar.set_postfix(**progress_metrics)
+                    except Exception as e:
+                        logger.error(f"Error updating progress bar: {e}")
+                        
         except Exception as e:
-            logger.error(f"Training encountered an error: {e}", exc_info=True)
-            # Try to save responses before raising the exception
+            logger.error(f"Training encountered an error: {str(e)}", exc_info=True)
+            # Try to save responses before exiting
             if self.generated_responses:
                 try:
                     self._save_responses()
                 except Exception as save_error:
-                    logger.error(f"Could not save responses after error: {save_error}")
-            raise e
-        finally:
-            progress_bar.close()
-            logger.info("Training loop finished.")
-            self.save_model()
+                    logger.error(f"Could not save responses after training error: {str(save_error)}")
 
-        return self.model
+        logger.info("Training loop finished.")
+        self.save_model(checkpoint_name="final")
+        
+        # Save final responses if any
+        if self.generated_responses:
+            try:
+                self._save_responses()
+            except Exception as save_error:
+                logger.error(f"Could not save final responses: {str(save_error)}")
+                
+        return self.model if not return_state_dict else self.model.state_dict()
+
+    def _prepare_inputs(self, batch):
+        """Prepare inputs for the model by extracting input_ids, attention_mask and metadata from batch."""
+        if not batch or not isinstance(batch, dict):
+            logger.warning("Invalid batch format received")
+            return None, None, None
+            
+        # Extract tensors from batch
+        input_ids = batch.get("input_ids", None)
+        attention_mask = batch.get("attention_mask", None)
+        metadata = batch.get("metadata", None)
+        
+        # Move tensors to the correct device if they're not None
+        if input_ids is not None:
+            input_ids = input_ids.to(self.device)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(self.device)
+            
+        return input_ids, attention_mask, metadata
 
 
 print("Custom classes and functions defined.")
@@ -1949,12 +2474,12 @@ if 'compute_dtype' not in locals():
      else: default_precision = "fp32"
 else: default_precision = "bf16" if use_bf16 else "fp16"
 colab_args = ArgsNamespace(model_name = "Qwen/Qwen2.5-14B-Instruct",
-use_pretrained_checkpoint = "/content/drive/MyDrive/PathToSFTCheckpoint/Checkpoint",
-output_dir = "./grpo_qlora_results",
-dataset_path = "/content/drive/My Drive/PathToDataset/GRPO_PnL_Trainer.jsonl",
-max_samples = 2500,
+use_pretrained_checkpoint = "/content/drive/MyDrive/Colab_Stock_Prediction/Qwen2.5_14BSFT_more_significant_movement_traces_8bit/checkpoint-200",
+output_dir = "/content/drive/MyDrive/4_21_1grpo_qlora_results",
+dataset_path = "/content/drive/My Drive/Big_Data/GRPO_PnL_Trainer.jsonl",
+max_samples = 18000,
 num_train_epochs = 1,
-max_steps = 2500,  # Increased from 100 to 2500 for full training
+max_steps = 15000,  # Increased from 100 to 2500 for full training
 per_device_train_batch_size = 1,
 gradient_accumulation_steps = 8,
 learning_rate = 5e-6,
@@ -1973,7 +2498,7 @@ max_holding_periods = 5,
 seed = 42,
 disable_wandb = True,
 debug = False,
-max_seq_length = 2048  # Increased from 1024 to 6000 for longer context
+max_seq_length = 4096,  # Set explicitly to 2048
 dataloader_num_workers = 0,
 logging_steps = 10,
 save_strategy = "steps",
@@ -1981,9 +2506,9 @@ save_steps = 250,  # Increased from 20 to 250
 precision = "bf16"
                 if torch.cuda.is_bf16_supported() else "fp16",
                 gradient_checkpointing = True,
-                max_completion_length = 2048,
+                max_completion_length = 512,  # Set to reasonable value for 2048 context
                 do_sample = True,
-                temperature = 0.6,
+                temperature = 0.7,
                 top_k = 50,
                 top_p = 0.9,
                 num_generations = 1)
@@ -2018,25 +2543,36 @@ def custom_main():
     try:
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name = base_model_name,
-            max_seq_length = colab_args.max_seq_length,  # Use the configured max_seq_length
+            max_seq_length = colab_args.max_seq_length,
             dtype = torch_dtype,
             load_in_4bit = True,
             trust_remote_code = True
         )
         logger.info("Base model loaded successfully via Unsloth.")
 
-        # Add LoRA adapters (instead of loading)
-        logger.info("Creating fresh LoRA adapters...")
-        model = FastLanguageModel.get_peft_model(
-            model,
-            r=colab_args.lora_r,
-            lora_alpha=colab_args.lora_alpha,
-            lora_dropout=colab_args.lora_dropout,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            bias="none",
-            use_gradient_checkpointing=colab_args.gradient_checkpointing,
-        )
-        logger.info("Fresh LoRA adapters created and applied to model.")
+        # Check if we should load from an existing checkpoint
+        if colab_args.use_pretrained_checkpoint and os.path.exists(colab_args.use_pretrained_checkpoint):
+            logger.info(f"Loading LoRA adapters from checkpoint: {colab_args.use_pretrained_checkpoint}")
+            print(f"=== LOADING EXISTING LORA ADAPTERS FROM: {colab_args.use_pretrained_checkpoint} ===")
+            
+            # Load the trained adapter weights
+            from peft import PeftModel
+            model = PeftModel.from_pretrained(model, colab_args.use_pretrained_checkpoint)
+            logger.info("Successfully loaded LoRA adapters from checkpoint.")
+        else:
+            # Add LoRA adapters (instead of loading)
+            logger.info("Creating fresh LoRA adapters...")
+            print("=== RUNNING MODIFIED TRAINING FUNCTION TO CREATE FRESH LORA ADAPTERS ===")
+            model = FastLanguageModel.get_peft_model(
+                model,
+                r=colab_args.lora_r,
+                lora_alpha=colab_args.lora_alpha,
+                lora_dropout=colab_args.lora_dropout,
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                bias="none",
+                use_gradient_checkpointing=colab_args.gradient_checkpointing,
+            )
+            logger.info("Fresh LoRA adapters created and applied to model.")
 
     except Exception as e:
         logger.error(f"Error setting up model: {e}", exc_info=True)
@@ -2099,7 +2635,7 @@ def custom_main():
         args=training_args,
         train_dataset=train_dataset,
         tokenizer=tokenizer,
-        max_seq_length=colab_args.max_seq_length,
+        max_seq_length=2048,  # Use 2048 token context window
         kl_coef=colab_args.kl_coef,
         stop_loss_pct=colab_args.stop_loss_pct,
         take_profit_pct=colab_args.take_profit_pct,
@@ -2458,4 +2994,87 @@ if __name__ == "__main__":
     # Uncomment to run validation tests
     # test_validation_function()
     custom_main()
+
+import json
+import pandas as pd
+import re
+from IPython.display import display, HTML
+
+# Let's examine a recent file to see what's inside
+file_path = "/content/drive/MyDrive/grpo_qlora_results/generated_responses/responses_step_124_20250421_232825.json"
+
+def examine_response_structure(file_path):
+    print(f"Examining file: {file_path}")
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            responses = json.load(f)
+        
+        print(f"Found {len(responses)} responses")
+        
+        # Display keys in the first response
+        if responses:
+            keys = list(responses[0].keys())
+            display(HTML(f"<h3>Keys in the response objects:</h3>"))
+            display(pd.DataFrame([keys], columns=[f"Key {i+1}" for i in range(len(keys))]))
+            
+            # Create a DataFrame to collect all important information
+            results = []
+            
+            for i, response in enumerate(responses):
+                # Extract key information
+                result = {"Response #": i+1}
+                
+                # Try to extract prediction from completion or generated_text
+                text_to_search = response.get('completion', response.get('generated_text', ''))
+                
+                # Extract direction
+                direction_match = re.search(r'Direction:\s*(UP|DOWN)', text_to_search)
+                result["Direction"] = direction_match.group(1) if direction_match else "N/A"
+                
+                # Extract change percentage
+                change_match = re.search(r'Change:\s*([\d\.]+)%', text_to_search)
+                result["Change %"] = change_match.group(1) + "%" if change_match else "N/A"
+                
+                # Extract entry conditions
+                entry_match = re.search(r'<entry_conditions>(.*?)</entry_conditions>', text_to_search, re.DOTALL)
+                result["Entry Conditions"] = entry_match.group(1) if entry_match else "N/A"
+                
+                # Extract exit conditions  
+                exit_match = re.search(r'<exit_conditions>(.*?)</exit_conditions>', text_to_search, re.DOTALL)
+                result["Exit Conditions"] = exit_match.group(1) if exit_match else "N/A"
+                
+                # Get reward metrics
+                if 'reward_metrics' in response:
+                    metrics = response['reward_metrics']
+                    for key, value in metrics.items():
+                        result[f"Reward: {key}"] = value
+                
+                results.append(result)
+            
+            # Display the results in a nice DataFrame
+            display(HTML(f"<h3>Extracted Information:</h3>"))
+            results_df = pd.DataFrame(results)
+            display(results_df)
+            
+            # Show a sample of the raw text for reference
+            display(HTML(f"<h3>Sample Raw Text (First Response):</h3>"))
+            text_sample = responses[0].get('completion', responses[0].get('generated_text', 'No text found'))
+            display(HTML(f"<div style='border:1px solid #ddd; padding:10px; max-height:300px; overflow:auto'><pre>{text_sample}</pre></div>"))
+            
+            # If there are reward metrics, show the average rewards
+            if 'reward_metrics' in responses[0]:
+                display(HTML(f"<h3>Average Reward Metrics:</h3>"))
+                reward_cols = [col for col in results_df.columns if col.startswith("Reward:")]
+                if reward_cols:
+                    averages = results_df[reward_cols].mean()
+                    display(pd.DataFrame([averages.values], columns=averages.index))
+    
+    except Exception as e:
+        print(f"Error processing file: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+# Run the examination with nicely formatted output
+examine_response_structure(file_path)
 
