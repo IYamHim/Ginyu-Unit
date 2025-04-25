@@ -3,10 +3,9 @@
 # ==============================================================================
 """
 Custom GRPO QLoRA Trainer for Qwen2.5-14B-Instruct for PnL Maximization (Colab Ready)
-*** USING UNSLOTH & USER'S CUSTOM TRAINER LOGIC ***
+*** USING UNSLOTH CUSTOM TRAINER LOGIC ***
 
-This script uses a custom GRPOTrainer implementation provided by the user,
-integrated with Unsloth for optimization and QLoRA for memory efficiency.
+This script uses a custom GRPOTrainer implementation, integrated with Unsloth for optimization and QLoRA for memory efficiency.
 
 IMPORTANT:
 - Ensure the custom reward logic in `calculate_trade_reward` matches your goals.
