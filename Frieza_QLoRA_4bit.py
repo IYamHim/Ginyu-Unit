@@ -2473,9 +2473,9 @@ if 'compute_dtype' not in locals():
      else: default_precision = "fp32"
 else: default_precision = "bf16" if use_bf16 else "fp16"
 colab_args = ArgsNamespace(model_name = "Qwen/Qwen2.5-14B-Instruct",
-use_pretrained_checkpoint = "/content/drive/MyDrive/Colab_Stock_Prediction/Qwen2.5_14BSFT_more_significant_movement_traces_8bit/checkpoint-200",
-output_dir = "/content/drive/MyDrive/4_21_1grpo_qlora_results",
-dataset_path = "/content/drive/My Drive/Big_Data/GRPO_PnL_Trainer.jsonl",
+use_pretrained_checkpoint = "Path to SFT checkpoint",
+output_dir = "Path to GRPO output",
+dataset_path = "Path to GRPO_PnL_Trainer.jsonl",
 max_samples = 18000,
 num_train_epochs = 1,
 max_steps = 15000,  # Increased from 100 to 2500 for full training
@@ -3000,7 +3000,7 @@ import re
 from IPython.display import display, HTML
 
 # Let's examine a recent file to see what's inside
-file_path = "/content/drive/MyDrive/grpo_qlora_results/generated_responses/responses_step_124_20250421_232825.json"
+file_path = "Path to .json"
 
 def examine_response_structure(file_path):
     print(f"Examining file: {file_path}")
@@ -3073,7 +3073,6 @@ def examine_response_structure(file_path):
         print(f"Error processing file: {str(e)}")
         import traceback
         traceback.print_exc()
-
-# Run the examination with nicely formatted output
+       
 examine_response_structure(file_path)
 
