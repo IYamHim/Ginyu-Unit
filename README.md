@@ -1,10 +1,6 @@
-# Cooler_Qwen3_14b
+# Cooler_Qwen3_14b (Previously Codename: Ginyu-Unit)
 
 A highly optimized QLoRA fine-tuning script for Qwen3-14B focused on financial market prediction with options trading recommendations.
-
-<p align="center">
-  <img src="https://via.placeholder.com/800x200/0073CF/FFFFFF?text=Cooler_Qwen3_14b" alt="Cooler_Qwen3_14b Banner">
-</p>
 
 ## Overview
 
