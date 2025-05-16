@@ -1,4 +1,527 @@
-# Codename Gi-Unit
+# Cooler_Qwen3_14b
+
+A highly optimized QLoRA fine-tuning script for Qwen3-14B focused on financial market prediction with options trading recommendations.
+
+<p align="center">
+  <img src="https://via.placeholder.com/800x200/0073CF/FFFFFF?text=Cooler_Qwen3_14b" alt="Cooler_Qwen3_14b Banner">
+</p>
+
+## Overview
+
+Cooler_Qwen3_14b transforms the Qwen3-14B model into a trading assistant through reinforcement learning with custom reward mechanisms. The model is designed to:
+
+- Analyze market data to make precise directional predictions (UP/DOWN/STRONG_UP/STRONG_DOWN)
+- Provide actionable options trading strategies with specific strike prices and expirations
+- Explain reasoning with both technical analysis and fundamental context
+- Adapt to different timeframes (hourly, daily, weekly, monthly)
+- Manage position sizing based on confidence level
+
+### System Architecture
+
+```mermaid
+graph TD
+    A[Qwen3-14B Base Model] --> B[QLoRA 4-bit Quantization]
+    B --> C[Custom Reward Training]
+    C --> D[Trained Model]
+    
+    E[with_thinking.jsonl] --> F[Data Processing]
+    G[without_thinking.jsonl] --> F
+    F --> C
+    
+    H[BankrollManager] --> C
+    I[Custom Reward Function] --> C
+    
+    D --> J[Trading Assistant]
+    J --> K[Market Predictions]
+    J --> L[Options Strategies]
+    J --> M[Risk Management]
+```
+
+## Technical Implementation
+
+- **QLoRA 4-bit Quantization**: Enables efficient fine-tuning of 14B parameter models
+- **Reinforcement Learning**: Custom reward function optimizes for prediction accuracy and trading performance
+- **Bankroll Management**: Simulates trading outcomes with dynamic capital allocation
+- **Memory Optimization**: Gradient accumulation and chunked processing for efficient training
+- **Colab Compatibility**: Designed to run on Google Colab with limited VRAM
+
+### Training Process Flow
+
+```
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│                 │       │                 │       │                 │
+│   Base Model    │──────▶│ QLoRA Adapters  │──────▶│ Forward Pass    │
+│   (Qwen3-14B)   │       │ (4-bit)         │       │ (Prediction)    │
+│                 │       │                 │       │                 │
+└─────────────────┘       └─────────────────┘       └────────┬────────┘
+                                                             │
+                                                             ▼
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│                 │       │                 │       │                 │
+│  Apply Weights  │◀──────│ Backpropagation │◀──────│ Reward Function │
+│  & Update LoRA  │       │ (REINFORCE)     │       │ Evaluation      │
+│                 │       │                 │       │                 │
+└─────────────────┘       └─────────────────┘       └─────────────────┘
+```
+
+## Requirements
+
+- **Hardware**: NVIDIA GPU with at least 40GB VRAM (A100 or equivalent)
+- **Software**:
+```
+torch
+transformers>=4.31.0
+peft>=0.4.0
+bitsandbytes>=0.40.0
+accelerate>=0.20.0
+datasets
+tqdm
+pandas
+```
+
+Even with 4-bit quantization, the model's memory footprint requires high-end GPU resources due to the 14B parameter size.
+
+### Memory Usage Breakdown
+
+| Component | Memory Usage |
+|-----------|--------------|
+| Base Model (4-bit) | ~7GB |
+| KV Cache | ~18GB |
+| Gradients | ~10GB |
+| Optimizer States | ~5GB |
+| Miscellaneous | ~2GB |
+| **Total** | **~42GB** |
+
+## Setup
+
+### Local Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/YOUR_USERNAME/Cooler_Qwen3_14b.git
+cd Cooler_Qwen3_14b
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+### Google Colab
+
+The script includes built-in Colab detection and will automatically:
+- Mount Google Drive
+- Install required packages
+- Configure the environment
+
+## Data Format
+
+Training data should be in JSONL format with two key files:
+- `with_thinking.jsonl`: Samples that include step-by-step reasoning
+- `without_thinking.jsonl`: Samples with direct predictions
+
+Each sample should contain:
+```json
+{
+  "messages": [{"role": "user", "content": "Analyze XYZ stock and predict movement"}],
+  "thinking_structured": {
+    "prediction": "UP",
+    "reasoning": "Price is above 200-day MA with increasing volume...",
+    "historical_context": "Stock has shown positive momentum for 3 weeks..."
+  },
+  "ticker": "XYZ",
+  "datetime_str": "2023-05-01 14:30:00",
+  "future_prices": [145.20, 146.30, 147.10, 145.80, 148.20],
+  "current_price": 145.20
+}
+```
+
+### Data Processing Pipeline
+
+```
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│                 │       │                 │       │                 │
+│  JSONL Loading  │──────▶│ Data Merging &  │──────▶│ Timeframe       │
+│  & Parsing      │       │ Preprocessing   │       │ Detection       │
+│                 │       │                 │       │                 │
+└─────────────────┘       └─────────────────┘       └────────┬────────┘
+                                                             │
+                                                             ▼
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│                 │       │                 │       │                 │
+│  Dataset        │◀──────│ Tokenization &  │◀──────│ Sample Labeling │
+│  Creation       │       │ Formatting      │       │ (has_thinking)  │
+│                 │       │                 │       │                 │
+└─────────────────┘       └─────────────────┘       └─────────────────┘
+```
+
+## Configuration
+
+Key parameters that can be modified in the script:
+
+```python
+# Model configuration
+model_name = "Qwen/Qwen3-14B"  # Base model
+output_dir = "qwen3_14b_memory_optimized_lora"  # Output path
+
+# LoRA configuration
+lora_config = LoraConfig(
+    r=16,  # Rank
+    lora_alpha=32,  # Alpha scaling
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    lora_dropout=0.05
+)
+
+# Training parameters
+batch_size = 1
+num_epochs = 1
+learning_rate = 2e-5
+```
+
+### Parameter Descriptions
+
+| Parameter | Description | Recommended Range |
+|-----------|-------------|------------------|
+| `r` | LoRA rank - controls the expressivity of adapter weights | 8-64 |
+| `lora_alpha` | LoRA scaling factor - impacts learning rate | 16-64 |
+| `target_modules` | Modules to apply LoRA to | Model-specific |
+| `lora_dropout` | Dropout rate for LoRA layers | 0.05-0.15 |
+| `learning_rate` | Optimizer learning rate | 1e-5 to 5e-5 |
+| `tokens_per_update` | Token batch size for gradient accumulation | 32-128 |
+
+## Usage
+
+### Running Training
+
+1. Place your data files in the appropriate location:
+```
+/content/drive/MyDrive/Big_Data/with_thinking.jsonl
+/content/drive/MyDrive/Big_Data/without_thinking.jsonl
+```
+
+2. Run the script:
+```bash
+python SS1.py
+```
+
+3. For custom data paths:
+```python
+# Modify these lines in the script
+with_thinking_path = '/path/to/with_thinking.jsonl'
+without_thinking_path = '/path/to/without_thinking.jsonl'
+```
+
+### Training Monitoring
+
+The script provides detailed logs during training:
+- Input/output samples
+- Reward calculations and components
+- Token-level loss information
+- Bankroll management metrics
+
+#### Sample Training Output
+
+```
+DEBUG - Detected timeframe: hourly
+DEBUG - Using global bankroll manager with current capital $205.50
+DEBUG - Sample structure:
+Sample keys: ['messages', 'thinking_structured', 'ticker', 'datetime_str', 'future_prices', 'current_price']
+Number of messages: 2
+Message keys: ['role', 'content']
+Thinking structured keys: ['prediction', 'reasoning', 'historical_context']
+
+Reward: 1.85, Total loss: 2.43
+```
+
+### Output
+
+The trained model is saved to the specified output directory with:
+- LoRA adapter weights
+- Tokenizer files
+- Configuration
+
+## Inference
+
+Load the fine-tuned model for inference:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
+
+# Load base model and tokenizer
+base_model = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen3-14B", 
+    device_map="auto",
+    trust_remote_code=True
+)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-14B", trust_remote_code=True)
+
+# Load LoRA weights
+model = PeftModel.from_pretrained(base_model, "qwen3_14b_memory_optimized_lora")
+
+# Create inference function
+def get_prediction(ticker, timeframe="hourly"):
+    prompt = f"Analyze {ticker} with {timeframe} chart. Predict direction and options strategy."
+    messages = [{"role": "user", "content": prompt}]
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+    outputs = model.generate(**inputs, max_new_tokens=256)
+    
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+# Example use
+prediction = get_prediction("AAPL", "daily")
+print(prediction)
+```
+
+### Example Output Format
+
+```
+<thinking>
+AAPL is showing bullish momentum with price action above the 20-day EMA. 
+Volume has increased on up days and RSI is at 62, not yet overbought. 
+MACD shows positive momentum with recent golden cross.
+</thinking>
+
+**HOURLY PREDICTION: UP**
+AAPL likely to continue upward movement over next few hours based on positive 
+momentum and institutional buying patterns.
+
+**2-WEEK OPTIONS STRATEGY:**
+Buy AAPL $185 CALL, 10 days expiration
+Entry: $3.20, Exit: When premium reaches $4.80 (50% profit) or $2.40 (25% loss)
+Position size: 15% of capital (Confidence: 70%)
+```
+
+## Reward System
+
+The model is optimized using a custom reward function that incentivizes:
+
+1. **Accurate predictions**: Higher rewards for correctly predicting price movements
+2. **Technical analysis**: Use of appropriate technical indicators and terminology
+3. **Clear formatting**: Using the dual prediction format (hourly + options)
+4. **Risk management**: Specifying stop-loss and take-profit levels
+5. **Position sizing**: Appropriate position sizing based on confidence
+
+### Reward Calculation Architecture
+
+```
+┌─────────────────────┐       ┌─────────────────────┐
+│                     │       │                     │
+│  Prediction Rewards │──────▶│  Directional Match  │
+│                     │       │  (UP/DOWN)          │
+│                     │       │                     │
+└─────────────────────┘       └─────────────────────┘
+          │
+          │
+          ▼
+┌─────────────────────┐       ┌─────────────────────┐
+│                     │       │                     │
+│  Format Rewards     │──────▶│  Dual Prediction    │
+│                     │       │  Format Adherence   │
+│                     │       │                     │
+└─────────────────────┘       └─────────────────────┘
+          │
+          │
+          ▼
+┌─────────────────────┐       ┌─────────────────────┐
+│                     │       │                     │
+│  Technical Analysis │──────▶│  Key Term Usage     │
+│  Rewards            │       │  & Context          │
+│                     │       │                     │
+└─────────────────────┘       └─────────────────────┘
+          │
+          │
+          ▼
+┌─────────────────────┐       ┌─────────────────────┐
+│                     │       │                     │
+│  Risk Management    │──────▶│  Stop-Loss &        │
+│  Rewards            │       │  Take-Profit Levels │
+│                     │       │                     │
+└─────────────────────┘       └─────────────────────┘
+          │
+          │
+          ▼
+┌─────────────────────┐       ┌─────────────────────┐
+│                     │       │                     │
+│  Bankroll Simulation│──────▶│  Trade Performance  │
+│  Rewards            │       │  & Outcomes         │
+│                     │       │                     │
+└─────────────────────┘       └─────────────────────┘
+```
+
+### Detailed Reward Components
+
+| Component | Description | Max Reward |
+|-----------|-------------|------------|
+| Technical Terms | Using market analysis terminology | 0.5 |
+| Clear Prediction | Explicit UP/DOWN direction | 0.5 |
+| Correct Prediction | Matching expected direction | 1.0 |
+| Early Prediction | Making prediction early in response | 0.5 |
+| Dual Format | Using proper hourly+options format | 0.4 |
+| Strike Price | Specifying option strike price | 0.2 |
+| Expiration | Appropriate expiration timeframe | 0.2 |
+| Stop-Loss | Defining stop-loss levels | 0.3 |
+| Take-Profit | Defining take-profit targets | 0.3 |
+| Bankroll Performance | Simulated trade outcome | 0.5-1.0 |
+
+## Troubleshooting
+
+### CUDA Out of Memory
+
+If you encounter OOM errors:
+- Reduce the `tokens_per_update` value (default: 64)
+- Ensure you're using 4-bit quantization
+- Try increasing the frequency of `torch.cuda.empty_cache()` calls
+
+**Memory Optimization Techniques Used:**
+```python
+# Memory optimization through gradient checkpointing
+model.gradient_checkpointing_enable()
+
+# Memory optimization through chunked processing
+for i in range(0, output_length, tokens_per_update):
+    # Process chunks of tokens instead of entire sequence
+    chunk_end = min(i + tokens_per_update, output_length)
+    
+    # Clean memory periodically
+    if i % (tokens_per_update * 4) == 0:
+        torch.cuda.empty_cache()
+```
+
+### Token ID Errors
+
+If you see "Out-of-vocab token detected!":
+- Check if tokenizer vocabulary size matches model vocabulary size
+- Ensure proper padding and special token handling
+
+## Advanced Usage
+
+### Custom Reward Functions
+
+You can modify the `custom_reward` function to implement different optimization targets:
+
+```python
+def custom_reward(sample, completion):
+    # Your custom reward logic here
+    reward = 0.0
+    
+    # Example: Reward for specific concepts
+    if "support level" in completion.lower():
+        reward += 0.2
+    
+    return reward
+```
+
+### Bankroll Manager
+
+The built-in bankroll manager simulates trading outcomes. Configure parameters:
+
+```python
+manager = BankrollManager(
+    initial_capital=200.0,  # Starting capital
+    position_size_pct=0.20,  # Default position size
+    max_position_pct=0.50    # Maximum position size
+)
+```
+
+#### Bankroll Manager Logic Flow
+
+```
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│                 │       │                 │       │                 │
+│  Prediction     │──────▶│  Position Size  │──────▶│  Trade Entry    │
+│  Evaluation     │       │  Calculation    │       │  Execution      │
+│                 │       │                 │       │                 │
+└─────────────────┘       └─────────────────┘       └────────┬────────┘
+                                                             │
+                                                             ▼
+┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
+│                 │       │                 │       │                 │
+│  Reward         │◀──────│  P&L            │◀──────│  Trade Exit     │
+│  Assignment     │       │  Calculation    │       │  Conditions     │
+│                 │       │                 │       │                 │
+└─────────────────┘       └─────────────────┘       └─────────────────┘
+```
+
+### Memory-Optimized Training Loop
+
+The training loop is designed for memory efficiency through:
+
+1. Chunked token processing with gradient accumulation
+2. Periodic CUDA cache clearing
+3. Gradient checkpointing with `use_reentrant=False`
+4. Dynamic sequence length limiting
+5. 4-bit weight quantization
+
+```python
+# Sample code for memory-optimized forward pass
+def optimized_forward_pass(model, inputs, output_ids, reward_tensor):
+    total_loss = 0.0
+    prompt_length = inputs['input_ids'].shape[1]
+    output_length = output_ids.shape[1] - prompt_length
+    
+    # Process in chunks
+    for i in range(0, output_length, tokens_per_update):
+        optimizer.zero_grad()
+        chunk_end = min(i + tokens_per_update, output_length)
+        chunk_size = chunk_end - i
+        chunk_loss = 0.0
+        
+        # Process each token in chunk
+        for j in range(i, chunk_end):
+            # Forward pass for single token prediction
+            prefix_length = prompt_length + j
+            current_input_ids = output_ids[:, :prefix_length]
+            target_id = output_ids[:, prefix_length]
+            
+            # Get logits and apply REINFORCE
+            outputs = model(input_ids=current_input_ids)
+            logits = outputs.logits[:, -1, :]
+            log_probs = F.log_softmax(logits, dim=-1)
+            token_log_prob = log_probs[0, target_id[0]]
+            token_loss = -token_log_prob * reward_tensor[j]
+            
+            # Accumulate loss
+            chunk_loss += token_loss / chunk_size
+            
+        # Backpropagate and update for this chunk
+        chunk_loss.backward()
+        optimizer.step()
+        
+        # Clear memory periodically
+        if i % (tokens_per_update * 4) == 0:
+            torch.cuda.empty_cache()
+            
+    return total_loss
+```
+
+## Acknowledgments
+
+Based on the Qwen3-14B model by the Qwen team at Alibaba Cloud.
+
+## License
+
+[MIT License](LICENSE)
+
+## Citation
+
+If you use this work in your research, please cite:
+
+```bibtex
+@software{cooler_qwen3_14b,
+  author = {Your Name},
+  title = {Cooler\_Qwen3\_14b: QLoRA Fine-tuning for Financial Trading Predictions},
+  year = {2023},
+  url = {https://github.com/YOUR_USERNAME/Cooler_Qwen3_14b}
+}
+```
+
+
+
+
+#### Deprecated Readme: Codename Gi-Unit ####
 
 A deep learning project for stonk market prediction using transformer models.
 
