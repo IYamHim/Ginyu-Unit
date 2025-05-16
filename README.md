@@ -5,9 +5,11 @@
 
 ⚠️ This content is strictly for educational purposes. The author explicitly states that it is not intended for use on live stocks or a live account. 
 
-⚠️ Only use for practice trading with NO REAL MONEY. Proceed at your own risk! 
+⚠️ Only use for practice trading with NO REAL MONEY.
 
 ⚠️ Nothing here constitutes financial advice. Always consult a qualified professional before making financial decisions. Additionally, outputs from a large language model (LLM) should never be considered inherently trustworthy—exercise caution and critical thinking at all times. 
+
+⚠️ Proceed at your own risk! 
 
 ## Overview
 
