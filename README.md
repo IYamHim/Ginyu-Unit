@@ -277,7 +277,7 @@ def get_prediction(ticker, timeframe="hourly"):
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 # Example use
-prediction = get_prediction("AAPL", "daily")
+prediction = get_prediction("XYZ", "daily")
 print(prediction)
 ```
 
@@ -285,17 +285,17 @@ print(prediction)
 
 ```
 <thinking>
-AAPL is showing bullish momentum with price action above the 20-day EMA. 
+XYZ is showing bullish momentum with price action above the 20-day EMA. 
 Volume has increased on up days and RSI is at 62, not yet overbought. 
 MACD shows positive momentum with recent golden cross.
 </thinking>
 
 **HOURLY PREDICTION: UP**
-AAPL likely to continue upward movement over next few hours based on positive 
+XYZ likely to continue upward movement over next few hours based on positive 
 momentum and institutional buying patterns.
 
 **2-WEEK OPTIONS STRATEGY:**
-Buy AAPL $185 CALL, 10 days expiration
+Buy XYZ $185 CALL, 10 days expiration
 Entry: $3.20, Exit: When premium reaches $4.80 (50% profit) or $2.40 (25% loss)
 Position size: 15% of capital (Confidence: 70%)
 ```
