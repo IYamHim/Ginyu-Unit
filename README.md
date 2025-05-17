@@ -779,5 +779,5 @@ python Kakarot.py \
 ## Acknowledgements
 
 - The Qwen team for the base model
-- Special thanks to Lukas Nel the creator of the 2084Collective/deepstock-sp500-companies-with-info-and-user-prompt dataset for the Stonk-Trainer, Stonk-V2, and Ginyu-Unit
+- Special thanks to Lukas Nel the creator of the 2084Collective/deepstock-sp500-companies-with-info-and-user-prompt dataset for the Stonk-Trainer, Stonk-V2, and early versions of Ginyu-Unit
 - The PyTorch and Hugging Face communities 
