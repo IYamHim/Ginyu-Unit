@@ -11,6 +11,7 @@
 
 ⚠️ Proceed at your own risk! 
 
+
 ## Overview
 
 Cooler_Qwen3_14b transforms the Qwen3-14B model into a trading assistant through reinforcement learning with custom reward mechanisms. The model is designed to:
@@ -309,6 +310,51 @@ The model is optimized using a custom reward function that incentivizes:
 4. **Risk management**: Specifying stop-loss and take-profit levels
 5. **Position sizing**: Appropriate position sizing based on confidence
 
+### Reward Calculation Example
+
+Below is a sample of the reward calculation process during training, showing how different components contribute to the final reward:
+
+```
+# Prediction Detection
+DEBUG - Found prediction term: BULLISH
+DEBUG - Context: '...moving average, which might indicate a bullish trend. The MA4 is 128.04...'
+DEBUG - Expected prediction: UP
+DEBUG - Detected prediction: UP
+DEBUG - Found matching prediction 'UP' in completion
+
+# Risk Management Detection
+DEBUG - Found exit condition: close, volume, ma8
+DEBUG - Found complete trade plan with entry and exit
+
+# Reward Components Breakdown
+Reward components: {
+  'non_empty': 0.1,              # Base reward for generating content
+  'technical_terms': 0.2,        # Using technical analysis terms
+  'multiple_technical_terms': 0.3, # Using multiple technical indicators
+  'clear_prediction': 0.5,       # Making a clear directional prediction
+  'correct_prediction': 1.0,     # Matching the expected direction
+  'price_mention': 0.2,          # Mentioning specific price levels
+  'exit_condition': 0.3,         # Specifying when to exit the trade
+  'accuracy_reward_0-10%': 0.3,  # Small reward for accuracy (small % move)
+  'complete_trade_plan': 0.3     # Providing both entry and exit points
+}
+Total reward: 3.2
+
+# Bankroll Simulation
+DEBUG - Starting trade with $230.88 capital
+DEBUG - Investing $63.49 (27.5%) in UP trade
+DEBUG - Remaining capital: $167.39
+DEBUG - Trade SYMBOL_103 UP from $127.73 to $128.25 (held)
+DEBUG - Invested: $63.49, Final value: $63.75, P&L: $0.26 (0.41%)
+DEBUG - New account balance: $231.14
+DEBUG - Bankroll evaluation results: {
+  'winning_trade': 0.5,           # Reward for profitable trade
+  'appropriate_position_size': 0.2 # Good position sizing based on confidence
+}
+```
+
+This example shows how the model is rewarded for accurate predictions, proper technical analysis, risk management, and overall trading performance through the bankroll simulation.
+
 ### Reward Calculation Architecture
 
 ```
@@ -523,12 +569,7 @@ If you use this work in your research, please cite:
 }
 ```
 
-
-
-
-#### Deprecated Readme: Codename Gi-Unit ####
-
-A deep learning project for stonk market prediction using transformer models.
+#### Begin Deprecated Readme.md ####
 
 ## Owner
 **./install_AI**
