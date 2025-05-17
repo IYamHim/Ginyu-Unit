@@ -554,20 +554,7 @@ Based on the Qwen3-14B model by the Qwen team at Alibaba Cloud.
 
 ## License
 
-[MIT License](LICENSE)
 
-## Citation
-
-If you use this work in your research, please cite:
-
-```bibtex
-@software{cooler_qwen3_14b,
-  author = {Your Name},
-  title = {Cooler\_Qwen3\_14b: QLoRA Fine-tuning for Financial Trading Predictions},
-  year = {2023},
-  url = {https://github.com/YOUR_USERNAME/Cooler_Qwen3_14b}
-}
-```
 
 #### Begin Deprecated Readme.md ####
 
